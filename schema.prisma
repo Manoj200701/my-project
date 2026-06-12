@@ -1,15 +1,15 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
-}
-
 model Diagnosis {
-  id          String   @id @default(uuid())
-  plantName   String
-  diseaseName String
-  createdAt   DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  plantName    String
+  diseaseName  String
+  createdAt    DateTime @default(now())
 }
