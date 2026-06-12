@@ -37,12 +37,20 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
 
         console.log("REQUEST RECEIVED");
 
+        // ========================================
+        // CHECK IMAGE
+        // ========================================
+
         if (!req.file) {
 
             return res.status(400).json({
                 error: "No image uploaded"
             });
         }
+
+        // ========================================
+        // CHECK TOKEN
+        // ========================================
 
         if (!HF_TOKEN) {
 
@@ -60,7 +68,7 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
         console.log("Sending image to HuggingFace...");
 
         const hfResponse = await fetch(
-            "https://api-inference.huggingface.co/models/dima806/plant-disease-image-detection",
+            "https://router.huggingface.co/hf-inference/models/dima806/plant-disease-image-detection",
             {
                 method: "POST",
                 headers: {
@@ -72,7 +80,7 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
         );
 
         // ========================================
-        // HANDLE API FAILURE
+        // HANDLE HF API FAILURE
         // ========================================
 
         if (!hfResponse.ok) {
@@ -89,13 +97,17 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
         }
 
         // ========================================
-        // GET MODEL RESPONSE
+        // GET RESPONSE
         // ========================================
 
         const modelResult = await hfResponse.json();
 
         console.log("HF RESPONSE RECEIVED");
         console.log(JSON.stringify(modelResult, null, 2));
+
+        // ========================================
+        // VALIDATE RESPONSE
+        // ========================================
 
         if (!Array.isArray(modelResult) || modelResult.length === 0) {
 
@@ -133,7 +145,7 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
         }
 
         // ========================================
-        // LABEL PROCESSING
+        // PROCESS LABEL
         // ========================================
 
         const label = bestPrediction.label;
@@ -182,7 +194,7 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
         }
 
         // ========================================
-        // FINAL RESPONSE
+        // SEND FINAL RESPONSE
         // ========================================
 
         return res.json({
