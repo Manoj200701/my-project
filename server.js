@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const fetch = require('node-fetch');
 const { PrismaClient } = require('@prisma/client');
 
 require('dotenv').config();
@@ -18,36 +19,48 @@ const upload = multer({
 const PORT = process.env.PORT || 10000;
 const HF_TOKEN = process.env.HF_TOKEN;
 
-// ===============================
-// API ROUTE
-// ===============================
+// ========================================
+// ROOT ROUTE
+// ========================================
+
+app.get('/', (req, res) => {
+    res.send('Plant Disease Backend Running');
+});
+
+// ========================================
+// DIAGNOSIS ROUTE
+// ========================================
 
 app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
 
     try {
 
-        // Check image exists
+        console.log("REQUEST RECEIVED");
+
         if (!req.file) {
+
             return res.status(400).json({
                 error: "No image uploaded"
             });
         }
 
-        // Check HF token
         if (!HF_TOKEN) {
+
             return res.status(500).json({
-                error: "HF_TOKEN missing in environment variables"
+                error: "HF_TOKEN missing"
             });
         }
 
         console.log("Image received successfully");
 
-        // ===============================
-        // HUGGING FACE API CALL
-        // ===============================
+        // ========================================
+        // HUGGINGFACE API CALL
+        // ========================================
+
+        console.log("Sending image to HuggingFace...");
 
         const hfResponse = await fetch(
-            "https://api-inference.huggingface.co/models/linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification",
+            "https://api-inference.huggingface.co/models/dima806/plant-disease-image-detection",
             {
                 method: "POST",
                 headers: {
@@ -58,12 +71,16 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
             }
         );
 
-        // Handle API errors
+        // ========================================
+        // HANDLE API FAILURE
+        // ========================================
+
         if (!hfResponse.ok) {
 
             const errorText = await hfResponse.text();
 
-            console.log("HF API ERROR:", errorText);
+            console.log("HF API ERROR:");
+            console.log(errorText);
 
             return res.status(500).json({
                 error: "HuggingFace API failed",
@@ -71,22 +88,25 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
             });
         }
 
-        // Parse predictions
+        // ========================================
+        // GET MODEL RESPONSE
+        // ========================================
+
         const modelResult = await hfResponse.json();
 
-        console.log("FULL MODEL RESULT:");
+        console.log("HF RESPONSE RECEIVED");
         console.log(JSON.stringify(modelResult, null, 2));
 
-        // Validate response
         if (!Array.isArray(modelResult) || modelResult.length === 0) {
+
             return res.status(500).json({
-                error: "No prediction returned from model"
+                error: "No prediction received"
             });
         }
 
-        // ===============================
+        // ========================================
         // SORT PREDICTIONS
-        // ===============================
+        // ========================================
 
         const sortedPredictions = modelResult.sort(
             (a, b) => b.score - a.score
@@ -94,28 +114,33 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
 
         const bestPrediction = sortedPredictions[0];
 
-        console.log("BEST PREDICTION:", bestPrediction);
+        console.log("BEST PREDICTION:");
+        console.log(bestPrediction);
 
-        // Confidence check
-        if (bestPrediction.score < 0.60) {
+        // ========================================
+        // CONFIDENCE CHECK
+        // ========================================
+
+        if (bestPrediction.score < 0.50) {
 
             return res.json({
                 plantName: "Unknown",
                 diseaseName: "Unable to detect confidently",
-                confidence: bestPrediction.score
+                confidence: Number(
+                    (bestPrediction.score * 100).toFixed(2)
+                )
             });
         }
 
-        // ===============================
-        // PROCESS LABEL
-        // ===============================
+        // ========================================
+        // LABEL PROCESSING
+        // ========================================
 
         const label = bestPrediction.label;
 
         let plantName = "Unknown";
         let diseaseName = "Healthy";
 
-        // Different models return different formats
         if (label.includes("___")) {
 
             const splitData = label.split("___");
@@ -135,9 +160,9 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
             diseaseName = label.replace(/_/g, ' ');
         }
 
-        // ===============================
+        // ========================================
         // SAVE TO DATABASE
-        // ===============================
+        // ========================================
 
         try {
 
@@ -152,18 +177,20 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
 
         } catch (dbError) {
 
-            console.log("Database save failed:");
+            console.log("DATABASE ERROR:");
             console.log(dbError.message);
         }
 
-        // ===============================
-        // SEND RESPONSE
-        // ===============================
+        // ========================================
+        // FINAL RESPONSE
+        // ========================================
 
         return res.json({
             plantName,
             diseaseName,
-            confidence: Number((bestPrediction.score * 100).toFixed(2)),
+            confidence: Number(
+                (bestPrediction.score * 100).toFixed(2)
+            ),
             predictions: sortedPredictions.slice(0, 3)
         });
 
@@ -179,9 +206,9 @@ app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
     }
 });
 
-// ===============================
+// ========================================
 // START SERVER
-// ===============================
+// ========================================
 
 app.listen(PORT, () => {
 
