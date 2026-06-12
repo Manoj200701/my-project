@@ -7,94 +7,184 @@ require('dotenv').config();
 
 const app = express();
 const prisma = new PrismaClient();
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
 
 app.use(cors());
 app.use(express.json());
 
+const upload = multer({
+    storage: multer.memoryStorage()
+});
+
 const PORT = process.env.PORT || 10000;
 const HF_TOKEN = process.env.HF_TOKEN;
 
-// Exact endpoint matching your frontend form action
+// ===============================
+// API ROUTE
+// ===============================
+
 app.post('/api/diagnose', upload.single('plantImage'), async (req, res) => {
+
     try {
+
+        // Check image exists
         if (!req.file) {
-            return res.status(400).json({ error: "Missing leaf file download attachment form binary data." });
+            return res.status(400).json({
+                error: "No image uploaded"
+            });
         }
 
+        // Check HF token
         if (!HF_TOKEN) {
-            console.error("HF_TOKEN missing in Environment Variable parameters.");
-            return res.status(500).json({ error: "HuggingFace infrastructure key authentication token not configured." });
+            return res.status(500).json({
+                error: "HF_TOKEN missing in environment variables"
+            });
         }
 
-        // Calling the official Hugging Face Plant Disease Classification model pipeline
+        console.log("Image received successfully");
+
+        // ===============================
+        // HUGGING FACE API CALL
+        // ===============================
+
         const hfResponse = await fetch(
-            "https://api-inference.huggingface.co/models/chb9/plant-disease-classification",
+            "https://api-inference.huggingface.co/models/linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification",
             {
-                headers: { 
+                method: "POST",
+                headers: {
                     Authorization: `Bearer ${HF_TOKEN}`,
                     "Content-Type": "application/octet-stream"
                 },
-                method: "POST",
-                body: req.file.buffer,
+                body: req.file.buffer
             }
         );
 
+        // Handle API errors
         if (!hfResponse.ok) {
-            const errText = await hfResponse.text();
-            throw new Error(`HuggingFace API service exception returned: ${errText}`);
+
+            const errorText = await hfResponse.text();
+
+            console.log("HF API ERROR:", errorText);
+
+            return res.status(500).json({
+                error: "HuggingFace API failed",
+                details: errorText
+            });
         }
 
+        // Parse predictions
         const modelResult = await hfResponse.json();
-        
-        if (!modelResult || modelResult.length === 0) {
-            throw new Error("Empty inference token response array received from machine learning model.");
+
+        console.log("FULL MODEL RESULT:");
+        console.log(JSON.stringify(modelResult, null, 2));
+
+        // Validate response
+        if (!Array.isArray(modelResult) || modelResult.length === 0) {
+            return res.status(500).json({
+                error: "No prediction returned from model"
+            });
         }
 
-        // Top match label classification extraction (e.g. "Tomato___Bacterial_spot")
-        const highestMatchLabel = modelResult[0].label;
-        console.log("Model RAW class string detected:", highestMatchLabel);
+        // ===============================
+        // SORT PREDICTIONS
+        // ===============================
 
-        // Splitting into structural variables based on your exact backend model schema logic
-        let plantName = "Tomato";
+        const sortedPredictions = modelResult.sort(
+            (a, b) => b.score - a.score
+        );
+
+        const bestPrediction = sortedPredictions[0];
+
+        console.log("BEST PREDICTION:", bestPrediction);
+
+        // Confidence check
+        if (bestPrediction.score < 0.60) {
+
+            return res.json({
+                plantName: "Unknown",
+                diseaseName: "Unable to detect confidently",
+                confidence: bestPrediction.score
+            });
+        }
+
+        // ===============================
+        // PROCESS LABEL
+        // ===============================
+
+        const label = bestPrediction.label;
+
+        let plantName = "Unknown";
         let diseaseName = "Healthy";
 
-        if (highestMatchLabel.includes("___")) {
-            const partitions = highestMatchLabel.split("___");
-            plantName = partitions[0].replace(/_/g, ' ');
-            diseaseName = partitions[1].replace(/_/g, ' ');
+        // Different models return different formats
+        if (label.includes("___")) {
+
+            const splitData = label.split("___");
+
+            plantName = splitData[0].replace(/_/g, ' ');
+            diseaseName = splitData[1].replace(/_/g, ' ');
+
+        } else if (label.includes("__")) {
+
+            const splitData = label.split("__");
+
+            plantName = splitData[0].replace(/_/g, ' ');
+            diseaseName = splitData[1].replace(/_/g, ' ');
+
         } else {
-            plantName = highestMatchLabel.replace(/_/g, ' ');
+
+            diseaseName = label.replace(/_/g, ' ');
         }
 
-        // Log transaction metrics securely directly into your live PostgreSQL database using Prisma Client
+        // ===============================
+        // SAVE TO DATABASE
+        // ===============================
+
         try {
+
             await prisma.diagnosis.create({
                 data: {
-                    plantName: plantName,
-                    diseaseName: diseaseName
+                    plantName,
+                    diseaseName
                 }
             });
-            console.log("Database transaction log saved successfully to PostgreSQL via Prisma.");
+
+            console.log("Saved to PostgreSQL");
+
         } catch (dbError) {
-            console.error("PostgreSQL tracking sync error caught safely:", dbError.message);
-            // Non-blocking database catch layout keeps operational flows live even if connection is faulty
+
+            console.log("Database save failed:");
+            console.log(dbError.message);
         }
 
-        // Send backend data structure back matching frontend parsing engine requirements precisely
+        // ===============================
+        // SEND RESPONSE
+        // ===============================
+
         return res.json({
-            plantName: plantName,
-            diseaseName: diseaseName
+            plantName,
+            diseaseName,
+            confidence: Number((bestPrediction.score * 100).toFixed(2)),
+            predictions: sortedPredictions.slice(0, 3)
         });
 
-    } catch (pipelineException) {
-        console.error("Inference processing layer crashed:", pipelineException);
-        return res.status(500).json({ error: "Internal processing engine block failure.", details: pipelineException.message });
+    } catch (error) {
+
+        console.log("SERVER ERROR:");
+        console.log(error);
+
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error.message
+        });
     }
 });
 
-// Primary Server Boot Diagnostic Matrix
+// ===============================
+// START SERVER
+// ===============================
+
 app.listen(PORT, () => {
-    console.log(`Backend Application Online. Running on deployment port structure: ${PORT}`);
+
+    console.log(`Server running on port ${PORT}`);
+
 });
