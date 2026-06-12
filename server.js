@@ -7,7 +7,8 @@ require('dotenv').config();
 
 const app = express();
 const prisma = new PrismaClient();
-const upload = multer({ storage: multer.memoryStorage() });
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 app.use(cors());
 app.use(express.json());
